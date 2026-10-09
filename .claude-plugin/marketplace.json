@@ -1,0 +1,17 @@
+{
+  "name": "task-pilot",
+  "owner": {
+    "name": "Sina Majnoon"
+  },
+  "metadata": {
+    "description": "Task continuity and time tracking for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "task-pilot",
+      "source": "./",
+      "description": "Keep tasks across Claude Code sessions and track the time you spend on each one.",
+      "category": "productivity"
+    }
+  ]
+}

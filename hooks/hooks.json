@@ -1,0 +1,23 @@
+{
+  "description": "task-pilot: session context, activity heartbeats for time tracking and session-to-task binding",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bundle/hook.js\"", "timeout": 10 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bundle/hook.js\"", "timeout": 10 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bundle/hook.js\"", "timeout": 10 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bundle/hook.js\"", "timeout": 10 }] }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*task-pilot.*__task_(create|start|resume|stop)",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bundle/hook.js\"", "timeout": 10 }]
+      }
+    ]
+  }
+}

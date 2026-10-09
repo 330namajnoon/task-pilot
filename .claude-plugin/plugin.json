@@ -1,0 +1,26 @@
+{
+  "name": "task-pilot",
+  "version": "0.1.0",
+  "description": "Keep tasks across Claude Code sessions (estimate, plan, progress, where you left off) and track the time you spend on each one, with daily and weekly reports.",
+  "author": {
+    "name": "Sina Majnoon"
+  },
+  "repository": "https://github.com/330namajnoon/task-pilot",
+  "license": "MIT",
+  "keywords": [
+    "tasks",
+    "time-tracking",
+    "planning",
+    "productivity",
+    "mcp",
+    "sessions"
+  ],
+  "mcpServers": {
+    "task-pilot": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/bundle/server.js"
+      ]
+    }
+  }
+}

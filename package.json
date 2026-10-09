@@ -1,0 +1,39 @@
+{
+  "name": "task-pilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code plugin that keeps tasks (estimate, plan, progress, where you left off) across sessions and tracks the time spent on each one.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "bundle": "npm run bundle:server && npm run bundle:hook",
+    "bundle:server": "esbuild src/index.ts --bundle --minify --platform=node --format=esm --target=node20 --outfile=bundle/server.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
+    "bundle:hook": "esbuild src/hook.ts --bundle --minify --platform=node --format=esm --target=node20 --outfile=bundle/hook.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "inspect": "npx @modelcontextprotocol/inspector node bundle/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.3"
+  }
+}
