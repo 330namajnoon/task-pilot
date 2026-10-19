@@ -72,7 +72,8 @@ test('lists, searches and opens a task', async ($, on) => {
     // Open tasks by default: STORE-1 with 45m tracked of a 1h 30m estimate.
     expect(await ui.find({ key: 'task-STORE-1' })).toBeDefined()
     expect(await ui.find({ key: 'task-STORE-2' })).toBeUndefined()
-    expect((await ui.find({ key: 'task-STORE-1' }))?.text).toMatch(/45m\/1h 30m/)
+    expect(await ui.find({ type: 'Text', text: /45m/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /de 1h 30m/ })).toBeDefined()
 
     await ui.press({ key: 'filter-all' })
     expect(await ui.find({ key: 'task-STORE-2' })).toBeDefined()

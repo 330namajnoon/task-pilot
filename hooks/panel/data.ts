@@ -158,7 +158,24 @@ export function matches(task: Task, query: string): boolean {
 
 export function bar(done: number, total: number, width = 12): string {
   if (total === 0) return ''
-  const full = Math.round((done / total) * width)
+  const full = Math.min(width, Math.round((done / total) * width))
 
   return `${'█'.repeat(full)}${'░'.repeat(width - full)}`
+}
+
+/** "hace 5 min", "hace 3 h", "ayer", "hace 4 días"... or the date when it is older than a month. */
+export function timeAgo(iso: string | undefined, now = Date.now()): string {
+  if (!iso) return '—'
+  const ms = Date.parse(iso)
+  if (Number.isNaN(ms)) return iso
+  const min = Math.max(0, Math.round((now - ms) / 60_000))
+  if (min < 1) return 'ahora mismo'
+  if (min < 60) return `hace ${min} min`
+  const h = Math.round(min / 60)
+  if (h < 24) return `hace ${h} h`
+  const d = Math.round(h / 24)
+  if (d === 1) return 'ayer'
+  if (d < 30) return `hace ${d} días`
+
+  return iso.slice(0, 10)
 }

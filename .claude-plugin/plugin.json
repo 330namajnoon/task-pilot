@@ -1,6 +1,6 @@
 {
   "name": "task-pilot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Keep tasks across Claude Code sessions (estimate, plan, progress, where you left off) and track the time you spend on each one, with daily and weekly reports.",
   "author": {
     "name": "Sina Majnoon"

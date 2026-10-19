@@ -11,6 +11,7 @@ import {
   minutesByTask,
   parseLog,
   parseTasks,
+  timeAgo,
 } from './data'
 import type { Task } from './data'
 
@@ -25,37 +26,57 @@ const view = atom({ plugin: 'task-pilot', key: 'view' } as const, {
 } as View)
 const tick = atom({ plugin: 'task-pilot', key: 'tick' } as const, 0)
 
-const STATUS_COLOR: Record<string, Color> = {
-  in_progress: 'suggestion',
-  blocked: 'error',
-  review: 'warning',
-  done: 'success',
-  cancelled: 'inactive',
-  planned: 'text',
-  backlog: 'subtle',
+type StatusInfo = { icon: string; label: string; plural: string; color: Color }
+
+// Ordered as the list groups them: what needs attention first.
+const STATUS: Record<string, StatusInfo> = {
+  in_progress: { icon: '▶', label: 'En curso', plural: 'En curso', color: 'suggestion' },
+  blocked: { icon: '■', label: 'Bloqueada', plural: 'Bloqueadas', color: 'error' },
+  review: { icon: '◐', label: 'En revisión', plural: 'En revisión', color: 'warning' },
+  planned: { icon: '○', label: 'Planificada', plural: 'Planificadas', color: 'text' },
+  backlog: { icon: '·', label: 'Pendiente', plural: 'Pendientes', color: 'subtle' },
+  done: { icon: '✔', label: 'Hecha', plural: 'Hechas', color: 'success' },
+  cancelled: { icon: '✕', label: 'Cancelada', plural: 'Canceladas', color: 'inactive' },
+}
+const STATUS_ORDER = Object.keys(STATUS)
+const statusOf = (status: string): StatusInfo =>
+  STATUS[status] ?? { icon: '○', label: status, plural: status, color: 'text' }
+
+const STEP: Record<string, { icon: string; color: Color }> = {
+  done: { icon: '✔', color: 'success' },
+  doing: { icon: '▶', color: 'suggestion' },
+  todo: { icon: '○', color: 'subtle' },
+  skipped: { icon: '⤼', color: 'inactive' },
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  backlog: 'backlog',
-  planned: 'planificada',
-  in_progress: 'en curso',
-  blocked: 'bloqueada',
-  review: 'revisión',
-  done: 'hecha',
-  cancelled: 'cancelada',
+const LOG_KIND: Record<string, { icon: string; label: string; color: Color }> = {
+  progress: { icon: '✔', label: 'Avance', color: 'success' },
+  decision: { icon: '◆', label: 'Decisión', color: 'claude' },
+  blocker: { icon: '⚠', label: 'Bloqueo', color: 'error' },
+  note: { icon: '✎', label: 'Nota', color: 'text' },
+  checkpoint: { icon: '⚑', label: 'Checkpoint', color: 'suggestion' },
+  status: { icon: '↻', label: 'Estado', color: 'warning' },
 }
-
-const STEP_MARK: Record<string, string> = { done: '✔', doing: '▶', todo: '○', skipped: '⤼' }
 
 const isOpen = (task: Task) => !CLOSED.includes(task.status)
+const isStepDone = (status: string) => status === 'done' || status === 'skipped'
 
 const byFilter = (filter: Filter) => (task: Task) =>
   filter === 'all' ? true : filter === 'open' ? isOpen(task) : !isOpen(task)
 
-const pad = (text: string, width: number) =>
-  text.length >= width ? `${text.slice(0, Math.max(0, width - 1))}…` : text.padEnd(width)
+const rank = (task: Task) => {
+  const i = STATUS_ORDER.indexOf(task.status)
+
+  return i === -1 ? STATUS_ORDER.length : i
+}
+
+/** Green while within the estimate, amber past 80 %, red once it is exceeded. */
+const timeColor = (spent: number, estimate?: number): Color =>
+  !estimate ? 'text' : spent > estimate ? 'error' : spent > estimate * 0.8 ? 'warning' : 'success'
 
 const basename = (path?: string) => path?.split('/').filter(Boolean).pop()
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -90,12 +111,14 @@ export const register: Register = on => {
     const { Box, Text, Button, Markdown } = elements
     // Mobile has no text field: the search is then the /tareas argument.
     const Input = 'Input' in elements ? elements.Input : undefined
+    const showHotkeys = e.surface === 'terminal'
     const v = await read($, view)
     await read($, tick)
     const root =
       (await $.env.get('TASK_PILOT_HOME')) ?? `${(await $.env.get('HOME')) ?? ''}/.claude-tasks`
     const columns = e.props.bodyColumns ?? e.viewport?.columns ?? 80
     const rows = e.viewport?.rows ?? 30
+    const narrow = columns < 70
 
     const readOr = (path: string) => $.fs.read(path).catch(() => '')
     const taskDirs = (await $.fs.list(`${root}/tasks`).catch(() => [])).filter(d => d.kind === 'dir')
@@ -108,11 +131,16 @@ export const register: Register = on => {
     const tasks = parseTasks(taskTexts)
     const minutes = minutesByTask(configText, timeTexts)
 
+    const hint = (text: string) => showHotkeys && <Text dimColor>{text}</Text>
+
     if (tasks.length === 0) {
       return (
-        <Box flexDirection="column">
-          <Text dimColor>No hay tareas en {root}.</Text>
-          <Text dimColor>Crea una con /task-pilot:new.</Text>
+        <Box flexDirection="column" alignItems="center" paddingY={2} gap={1}>
+          <Text size="heading" bold>
+            Todavía no hay tareas
+          </Text>
+          <Text dimColor>Crea la primera con /task-pilot:new y aparecerá aquí,</Text>
+          <Text dimColor>con su progreso, el tiempo dedicado y dónde lo dejaste.</Text>
         </Box>
       )
     }
@@ -128,117 +156,157 @@ export const register: Register = on => {
       const log = parseLog(logText)
       const spent = minutes.get(selected.id) ?? 0
       const estimate = estimateOf(selected)
-      const done = selected.steps.filter(s => s.status === 'done' || s.status === 'skipped').length
+      const done = selected.steps.filter(s => isStepDone(s.status)).length
       const total = selected.steps.length
-      const isOver = estimate !== undefined && spent > estimate
+      const status = statusOf(selected.status)
+      const tColor = timeColor(spent, estimate)
+      const pct = estimate ? Math.round((spent / estimate) * 100) : undefined
       const meta = [
         selected.type,
         basename(selected.project),
-        selected.branch && `rama ${selected.branch}`,
+        selected.branch && `⎇ ${selected.branch}`,
         selected.externalRef && selected.externalRef !== selected.id && selected.externalRef,
         ...selected.tags.map(t => `#${t}`),
       ].filter(Boolean)
+      const statWidth = narrow ? undefined : '50%'
 
       return (
         <Box flexDirection="column" gap={1}>
-          <Box flexDirection="row" gap={1}>
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
             <Button key="back" hotkey="b" onPress={() => update($, view, x => ({ ...x, selected: null }))}>
-              ← Volver
-            </Button>
-            <Button key="refresh" hotkey="r" onPress={() => update($, tick, n => n + 1)}>
-              Refrescar
+              ← Volver a la lista
             </Button>
             <Button
               key="copy"
+              variant="primary"
               onPress={press => $.ui.copy({ text: `/task-pilot:resume ${selected.id}`, surface: press.surface })}
             >
-              Copiar /resume
+              Copiar comando para retomar
+            </Button>
+            <Button key="refresh" hotkey="r" dimColor onPress={() => update($, tick, n => n + 1)}>
+              ↻ Refrescar
             </Button>
           </Box>
 
-          <Box flexDirection="column">
-            <Text bold>
-              {selected.id} · {selected.title}
-            </Text>
+          <Box flexDirection="column" borderStyle="round" borderColor={status.color} paddingX={1}>
             <Text>
-              <Text color={STATUS_COLOR[selected.status] ?? 'text'} bold>
-                {STATUS_LABEL[selected.status] ?? selected.status}
+              <Text color={status.color} bold>
+                {status.icon} {status.label}
               </Text>
-              <Text dimColor> · {meta.join(' · ')}</Text>
+              <Text dimColor> · {selected.id}</Text>
             </Text>
-            {selected.description && <Text dimColor>{selected.description}</Text>}
+            <Text size="title" bold>
+              {selected.title}
+            </Text>
+            {meta.length > 0 && <Text dimColor>{meta.join('  ·  ')}</Text>}
+            {selected.description && <Text>{selected.description}</Text>}
           </Box>
 
-          <Box flexDirection="column">
-            {total > 0 && (
-              <Text>
-                Progreso <Text color="success">{bar(done, total, 20)}</Text> {done}/{total} pasos
-              </Text>
-            )}
-            <Text>
-              Tiempo{'   '}
-              <Text color={isOver ? 'error' : 'text'} bold>
+          <Box flexDirection={narrow ? 'column' : 'row'} gap={1}>
+            <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1} width={statWidth} flexGrow={1}>
+              <Text dimColor>Progreso</Text>
+              {total > 0 ? (
+                <Box flexDirection="column">
+                  <Text size="heading" bold>
+                    {Math.round((done / total) * 100)} %
+                  </Text>
+                  <Text>
+                    <Text color="success">{bar(done, total, 16)}</Text> {done}/{total} pasos
+                  </Text>
+                </Box>
+              ) : (
+                <Text dimColor>Sin plan de pasos</Text>
+              )}
+            </Box>
+            <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1} width={statWidth} flexGrow={1}>
+              <Text dimColor>Tiempo dedicado</Text>
+              <Text size="heading" bold color={tColor}>
                 {formatMinutes(spent)}
               </Text>
-              <Text dimColor>
-                {' '}
-                de {formatMinutes(estimate)}
-                {estimate ? ` (${Math.round((spent / estimate) * 100)}%)` : ''}
-              </Text>
-            </Text>
-            <Text dimColor>
-              Creada {selected.createdAt.slice(0, 10)} · actualizada {selected.updatedAt.slice(0, 16).replace('T', ' ')}
-              {selected.closedAt ? ` · cerrada ${selected.closedAt.slice(0, 10)}` : ''}
-            </Text>
+              {estimate ? (
+                <Text>
+                  <Text color={tColor}>{bar(spent, estimate, 16)}</Text>
+                  <Text dimColor>
+                    {' '}
+                    {pct} % de {formatMinutes(estimate)}
+                    {spent > estimate ? ` · ${formatMinutes(spent - estimate)} de más` : ''}
+                  </Text>
+                </Text>
+              ) : (
+                <Text dimColor>Sin estimación</Text>
+              )}
+            </Box>
           </Box>
 
           {total > 0 && (
             <Box flexDirection="column">
               <Text bold>Pasos</Text>
-              {selected.steps.map(step => (
-                <Text dimColor={step.status === 'done' || step.status === 'skipped'}>
-                  <Text color={step.status === 'doing' ? 'suggestion' : step.status === 'done' ? 'success' : 'text'}>
-                    {STEP_MARK[step.status] ?? '○'}
-                  </Text>{' '}
-                  {step.id}. {step.text}
-                  {step.estimateMin ? ` (${formatMinutes(step.estimateMin)})` : ''}
-                </Text>
-              ))}
+              {selected.steps.map(step => {
+                const mark = STEP[step.status] ?? STEP.todo!
+                const current = step.status === 'doing'
+
+                return (
+                  <Text dimColor={isStepDone(step.status)}>
+                    {' '}
+                    <Text color={mark.color}>{mark.icon}</Text> <Text bold={current}>{step.text}</Text>
+                    {step.estimateMin ? <Text dimColor> · {formatMinutes(step.estimateMin)}</Text> : ''}
+                    {current ? <Text color="suggestion"> ← ahora</Text> : ''}
+                  </Text>
+                )
+              })}
             </Box>
           )}
 
           {context && (
             <Box flexDirection="column">
-              <Text bold>Dónde se quedó</Text>
-              <Markdown key="context" text={context} />
+              <Text bold>Dónde lo dejaste</Text>
+              <Box borderStyle="round" borderColor="claude" paddingX={1}>
+                <Markdown key="context" text={context} />
+              </Box>
             </Box>
           )}
 
           {log.length > 0 && (
             <Box flexDirection="column">
-              <Text bold>Historial</Text>
+              <Text bold>Últimos movimientos</Text>
               {log
                 .slice(-6)
                 .reverse()
-                .map(entry => (
-                  <Text wrap="truncate-end">
-                    <Text dimColor>{entry.when}</Text> <Text color="claude">{entry.kind}</Text>{' '}
-                    {entry.text.split('\n')[0]}
-                  </Text>
-                ))}
+                .map(entry => {
+                  const kind = LOG_KIND[entry.kind] ?? { icon: '•', label: entry.kind, color: 'text' as Color }
+
+                  return (
+                    <Text wrap="truncate-end">
+                      {' '}
+                      <Text color={kind.color}>{kind.icon}</Text> <Text dimColor>{entry.when}</Text>{' '}
+                      <Text color={kind.color}>{kind.label}</Text> {entry.text.split('\n')[0]}
+                    </Text>
+                  )
+                })}
             </Box>
           )}
+
+          <Text dimColor>
+            Creada {timeAgo(selected.createdAt)} · actualizada {timeAgo(selected.updatedAt)}
+            {selected.closedAt ? ` · cerrada ${timeAgo(selected.closedAt)}` : ''}
+          </Text>
+          {hint('b volver · r refrescar')}
         </Box>
       )
     }
 
-    const filtered = tasks.filter(byFilter(v.filter)).filter(t => matches(t, v.query))
-    const perPage = Math.max(3, rows - 8)
+    const filtered = tasks
+      .filter(byFilter(v.filter))
+      .filter(t => matches(t, v.query))
+      .sort((a, b) => rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt))
+    // Each card takes 4 rows; the header, search, filters and footer about 10.
+    const perPage = Math.max(2, Math.floor((rows - 10) / 4))
     const pages = Math.max(1, Math.ceil(filtered.length / perPage))
     const page = Math.min(v.page, pages - 1)
     const shown = filtered.slice(page * perPage, (page + 1) * perPage)
-    const titleWidth = Math.max(10, columns - 12 - 12 - 14 - 16 - 6)
-    const openCount = tasks.filter(isOpen).length
+    const openTasks = tasks.filter(isOpen)
+    const countOf = (status: string) => openTasks.filter(t => t.status === status).length
+    const totalOpenMinutes = openTasks.reduce((n, t) => n + (minutes.get(t.id) ?? 0), 0)
 
     const filterButton = (filter: Filter, label: string, hotkey: string) => (
       <Button
@@ -251,62 +319,135 @@ export const register: Register = on => {
       </Button>
     )
 
-    return (
-      <Box flexDirection="column">
-        {Input && (
-        <Input
-          key="search"
-          label="Buscar "
-          placeholder="ID, título, rama, proyecto, paso…"
-          value={v.query}
-          submitLabel="buscar"
-          autoFocus
-          onInput={(query: string) => update($, view, x => ({ ...x, query, page: 0 }))}
-          onSubmit={(query: string) => update($, view, x => ({ ...x, query, page: 0 }))}
-        />
-        )}
-        {!Input && v.query && <Text dimColor>Búsqueda: {v.query}</Text>}
-        <Box flexDirection="row" gap={1}>
-          {filterButton('open', `Abiertas (${openCount})`, 'a')}
-          {filterButton('all', `Todas (${tasks.length})`, 't')}
-          {filterButton('closed', `Cerradas (${tasks.length - openCount})`, 'c')}
-          <Button key="refresh" hotkey="r" onPress={() => update($, tick, n => n + 1)}>
-            Refrescar
-          </Button>
-        </Box>
-        <Text dimColor>
-          {pad('ID', 12)} {pad('Estado', 12)} {pad('Progreso', 14)} {pad('Tiempo', 16)} Título
-        </Text>
-        {shown.length === 0 && <Text dimColor>Ninguna tarea coincide.</Text>}
-        {shown.map(task => {
-          const done = task.steps.filter(s => s.status === 'done' || s.status === 'skipped').length
-          const spent = minutes.get(task.id) ?? 0
-          const estimate = estimateOf(task)
-          const isOver = estimate !== undefined && spent > estimate
+    const summary = [
+      countOf('in_progress') > 0 && { text: `▶ ${countOf('in_progress')} en curso`, color: 'suggestion' as Color },
+      countOf('blocked') > 0 && {
+        text: `■ ${plural(countOf('blocked'), 'bloqueada', 'bloqueadas')}`,
+        color: 'error' as Color,
+      },
+      countOf('review') > 0 && { text: `◐ ${countOf('review')} en revisión`, color: 'warning' as Color },
+    ].filter(x => x !== false)
 
-          return (
-            <Button key={`task-${task.id}`} plain onPress={() => update($, view, x => ({ ...x, selected: task.id }))}>
-              <Text bold>{pad(task.id, 12)}</Text>{' '}
-              <Text color={STATUS_COLOR[task.status] ?? 'text'}>{pad(STATUS_LABEL[task.status] ?? task.status, 12)}</Text>{' '}
-              <Text color="success">{task.steps.length ? pad(`${bar(done, task.steps.length, 8)} ${done}/${task.steps.length}`, 14) : pad('', 14)}</Text>{' '}
-              <Text color={isOver ? 'error' : 'text'}>{pad(`${formatMinutes(spent)}/${formatMinutes(estimate)}`, 16)}</Text>{' '}
-              {pad(task.title, titleWidth)}
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Box flexDirection="column">
+          <Text>
+            <Text bold>{plural(openTasks.length, 'tarea abierta', 'tareas abiertas')}</Text>
+            {summary.map(s => (
+              <Text>
+                <Text dimColor> · </Text>
+                <Text color={s.color}>{s.text}</Text>
+              </Text>
+            ))}
+          </Text>
+          <Text dimColor>⏱ {formatMinutes(totalOpenMinutes)} dedicadas a las tareas abiertas</Text>
+        </Box>
+
+        <Box flexDirection="column">
+          {Input && (
+            <Input
+              key="search"
+              label="Buscar "
+              placeholder="Buscar por ID, título, rama, proyecto o paso…"
+              value={v.query}
+              submitLabel="buscar"
+              autoFocus
+              onInput={(query: string) => update($, view, x => ({ ...x, query, page: 0 }))}
+              onSubmit={(query: string) => update($, view, x => ({ ...x, query, page: 0 }))}
+            />
+          )}
+          {!Input && v.query && <Text dimColor>Búsqueda: {v.query}</Text>}
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            {filterButton('open', `Abiertas ${openTasks.length}`, 'a')}
+            {filterButton('closed', `Cerradas ${tasks.length - openTasks.length}`, 'c')}
+            {filterButton('all', `Todas ${tasks.length}`, 't')}
+            <Button key="refresh" hotkey="r" dimColor onPress={() => update($, tick, n => n + 1)}>
+              ↻
             </Button>
-          )
-        })}
+          </Box>
+        </Box>
+
+        {shown.length === 0 && (
+          <Box flexDirection="column" alignItems="center" paddingY={1}>
+            <Text dimColor>
+              {v.query ? `Nada coincide con «${v.query}».` : 'No hay tareas en esta vista.'}
+            </Text>
+            {v.filter !== 'all' && <Text dimColor>Prueba con «Todas».</Text>}
+          </Box>
+        )}
+
+        <Box flexDirection="column">
+          {shown.map((task, i) => {
+            const status = statusOf(task.status)
+            const done = task.steps.filter(s => isStepDone(s.status)).length
+            const spent = minutes.get(task.id) ?? 0
+            const estimate = estimateOf(task)
+            const current = task.steps.find(s => s.status === 'doing') ?? task.steps.find(s => s.status === 'todo')
+            const newGroup = i === 0 || shown[i - 1]!.status !== task.status
+            const groupSize = filtered.filter(t => t.status === task.status).length
+
+            return (
+              <Box flexDirection="column">
+                {newGroup && (
+                  <Text color={status.color} bold>
+                    {status.icon} {status.plural} <Text dimColor>({groupSize})</Text>
+                  </Text>
+                )}
+                <Box
+                  key={`card-${task.id}`}
+                  flexDirection="column"
+                  borderStyle="round"
+                  borderDimColor
+                  hover={{ borderColor: status.color, borderDimColor: false }}
+                  paddingX={1}
+                >
+                  <Button
+                    key={`task-${task.id}`}
+                    plain
+                    onPress={() => update($, view, x => ({ ...x, selected: task.id }))}
+                  >
+                    <Text color={status.color} bold>
+                      {task.id}
+                    </Text>{' '}
+                    <Text bold>{task.title}</Text> <Text dimColor>· {timeAgo(task.updatedAt)} ›</Text>
+                  </Button>
+                  <Text wrap="truncate-end">
+                    {task.steps.length > 0 ? (
+                      <Text>
+                        <Text color="success">{bar(done, task.steps.length, 10)}</Text>{' '}
+                        <Text dimColor>
+                          {done}/{task.steps.length}
+                        </Text>
+                      </Text>
+                    ) : (
+                      <Text dimColor>sin pasos</Text>
+                    )}
+                    <Text dimColor>{'   '}⏱ </Text>
+                    <Text color={timeColor(spent, estimate)}>{formatMinutes(spent)}</Text>
+                    <Text dimColor> de {formatMinutes(estimate)}</Text>
+                    {current && isOpen(task) ? <Text dimColor>{'   '}→ {current.text}</Text> : ''}
+                  </Text>
+                </Box>
+              </Box>
+            )
+          })}
+        </Box>
+
         {pages > 1 && (
-          <Box flexDirection="row" gap={1}>
+          <Box flexDirection="row" gap={1} alignItems="center">
             <Button key="prev" hotkey="p" onPress={() => update($, view, x => ({ ...x, page: Math.max(0, page - 1) }))}>
-              ◀
+              ◀ Anterior
             </Button>
             <Text dimColor>
-              página {page + 1}/{pages}
+              {page + 1} de {pages}
             </Text>
             <Button key="next" hotkey="n" onPress={() => update($, view, x => ({ ...x, page: Math.min(pages - 1, page + 1) }))}>
-              ▶
+              Siguiente ▶
             </Button>
           </Box>
         )}
+
+        {hint('Pulsa una tarea para ver el detalle · a/c/t filtrar · r refrescar' + (pages > 1 ? ' · p/n página' : ''))}
       </Box>
     )
   })
