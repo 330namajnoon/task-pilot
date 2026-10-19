@@ -116,6 +116,63 @@ describe("task tools", () => {
     expect(csv.split("\n")[1]).toBe(`${day},T-0001,Fix crash,bug,backlog,${process.cwd()},45`);
   });
 
+  it("nests subtasks at any depth, each with its own status", async () => {
+    await call("task_create", {
+      title: "Checkout",
+      type: "feature",
+      externalRef: "STORE-7",
+      project: "/repo",
+      start: false,
+    });
+    const sub = await call("task_create", {
+      title: "Payment form",
+      type: "feature",
+      parentId: "store-7",
+    });
+    expect(sub).toContain("STORE-7.1 · Payment form");
+    expect(sub).toContain("Subtask of: STORE-7 · Checkout");
+    expect(getTask("STORE-7.1")?.project).toBe("/repo");
+    await call("task_create", {
+      title: "Validation",
+      type: "feature",
+      parentId: "STORE-7.1",
+      start: false,
+    });
+    await call("task_create", {
+      title: "Emails",
+      type: "feature",
+      parentId: "STORE-7",
+      start: false,
+    });
+    await call("task_update", { id: "STORE-7.2", status: "done" });
+
+    expect(getTask("STORE-7.1")?.status).toBe("in_progress");
+    expect(getTask("STORE-7.1.1")?.status).toBe("backlog");
+    expect(getTask("STORE-7")?.status).toBe("backlog");
+
+    const list = await call("task_list", { status: "all" });
+    expect(list).toMatch(/^- \*\*STORE-7\*\*/m);
+    expect(list).toMatch(/^ {2}- \*\*STORE-7\.1\*\*/m);
+    expect(list).toMatch(/^ {4}- \*\*STORE-7\.1\.1\*\*/m);
+    expect(await call("task_list", { parent: "STORE-7.1" })).toMatch(
+      /^- \*\*STORE-7\.1\.1\*\* · subtask of STORE-7\.1/,
+    );
+
+    const pack = await call("task_resume", { id: "STORE-7" });
+    expect(pack).toContain("## Subtasks");
+    expect(pack).toContain("1/3 subtasks closed");
+    expect(pack).toContain("  - **STORE-7.1.1** · backlog · Validation");
+
+    const closed = await call("task_update", { id: "STORE-7", status: "done" });
+    expect(closed).toContain("has open subtasks: STORE-7.1 (in_progress), STORE-7.1.1 (backlog)");
+
+    await expect(call("task_update", { id: "STORE-7", parentId: "STORE-7.1.1" })).rejects.toThrow(
+      "cannot be its parent",
+    );
+    await call("task_update", { id: "STORE-7.1.1", parentId: "" });
+    expect(getTask("STORE-7.1.1")?.parentId).toBeUndefined();
+  });
+
   it("returns a readable error for unknown tasks", async () => {
     await expect(call("task_resume", { id: "NOPE-1" })).rejects.toThrow("not found");
   });

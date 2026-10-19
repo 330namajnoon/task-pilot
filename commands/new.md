@@ -1,6 +1,6 @@
 ---
 description: Create a task with type, plan and estimate, and start tracking it
-argument-hint: "<what you want to do> [ticket like STORE-123]"
+argument-hint: "<what you want to do> [ticket like STORE-123] [subtask of <id>]"
 ---
 
 The user wants to start this piece of work as a tracked task: $ARGUMENTS
@@ -11,5 +11,6 @@ The user wants to start this piece of work as a tracked task: $ARGUMENTS
    - a plan of 3–8 concrete steps, each with an estimate in minutes,
    - the total estimate. Call `report` with `period: "month"` (or a wider `from`) and use the "Estimation accuracy" table, if there is one, to correct your estimate for this type.
    If a ticket key appears in the request (e.g. STORE-6042), use it as `externalRef`.
+   If the request says it is part of another task ("subtask of STORE-6042", "under T-0003"), pass that id as `parentId`: the new task gets its own status, plan and time, and is shown under its parent.
 3. Wait for the user to confirm or adjust the plan, then call `task_create` with it.
 4. Continue with the first step, marking it `doing` with `task_plan`.

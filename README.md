@@ -4,6 +4,7 @@ A [Claude Code](https://claude.com/claude-code) plugin that keeps your tasks **a
 
 - **Continue where you left off.** Each task stores its estimate, plan of steps, a log of decisions and blockers, and a checkpoint of exactly where the work stands. A new session (or a compacted one) picks it up with the same thread.
 - **Automatic time tracking.** Hooks record activity per session; the time is assigned to the task that session is working on. No timers to start or stop. Corrections and work done outside Claude Code (meetings, calls) can be added by hand.
+- **Subtasks, at any depth.** Any task can be split into subtasks (and those into more subtasks). Each one has its own status, plan, checkpoint, log and time, and is shown under its parent in lists, in `task_resume` and in the panel.
 - **Daily and weekly control.** Reports per task, type, project and day, how much time went to work without a task, and how accurate your estimates are per type of task.
 
 Everything is stored as plain JSON / Markdown in `~/.claude-tasks/`. Nothing leaves your machine.
@@ -30,7 +31,7 @@ Restart Claude Code after installing so the hooks and the MCP server load.
 | `/task-pilot:status` | Open tasks with progress and time vs estimate |
 | `/task-pilot:today` | What you worked on today and for how long |
 | `/task-pilot:report [period]` | Report for `week`, `last_week`, `month`, a date range…, optionally as CSV |
-| `/tareas [search \| id]` | Opens a panel to browse and search tasks, with each task's steps, time vs estimate, last checkpoint and log |
+| `/task-pilot:tasks [search \| id]` | Opens a panel to browse and search tasks and subtasks, with each task's steps, time vs estimate, last checkpoint and log |
 
 You don't need the commands for everything: the plugin includes a skill, so asking things like *"let's continue the login task"*, *"what did I do this week?"* or *"how long would this take?"* works too. When a session starts in a repo that has open tasks, Claude is told about them.
 
@@ -62,7 +63,7 @@ Parallel sessions are not double-counted in the daily total. Use `time_adjust` (
 ```text
 ~/.claude-tasks/
   config.json                 task types, idleTimeoutMin, maxTurnMin, checkpointReminderMin, workdayHours
-  tasks/<ID>/task.json        title, type, status, estimate, project, branch, ticket, tags, steps
+  tasks/<ID>/task.json        title, type, status, estimate, project, branch, ticket, tags, steps, parentId
   tasks/<ID>/context.md       last checkpoint: where the work stands and what's next
   tasks/<ID>/log.md           dated history: progress, decisions, blockers, status changes
   sessions/<session>.json     which task each Claude Code session is working on

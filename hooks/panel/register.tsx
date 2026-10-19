@@ -3,8 +3,11 @@ import type { Color, Register } from 'claude-code'
 
 import type { Filter, View } from '../../types'
 import {
+  ancestorsOf,
   bar,
+  childrenOf,
   CLOSED,
+  descendantsOf,
   estimateOf,
   formatMinutes,
   matches,
@@ -17,6 +20,8 @@ import type { Task } from './data'
 
 const PANE = 'task-pilot'
 const TITLE = 'Tareas'
+// The plugin's markdown command (commands/tasks.md): the panel answers it so it opens without a turn.
+const COMMAND = 'task-pilot:tasks'
 
 const view = atom({ plugin: 'task-pilot', key: 'view' } as const, {
   query: '',
@@ -79,17 +84,7 @@ const basename = (path?: string) => path?.split('/').filter(Boolean).pop()
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 export const register: Register = on => {
-  on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'tareas',
-      description: 'Abre el panel de tareas de task-pilot (opcional: texto a buscar o ID)',
-      argumentHint: '[búsqueda | ID]',
-    })
-
-    return next(e)
-  })
-
-  on('command.run', { command: 'tareas' }, async ($, e) => {
+  on('command.run', { command: COMMAND }, async ($, e) => {
     const arg = e.args.trim()
     // An argument that is a task ID opens its detail; anything else is a search (see the render hook).
     if (arg) await update($, view, v => ({ ...v, query: arg, filter: 'all' as const, selected: arg, page: 0 }))
@@ -109,7 +104,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
     const { Box, Text, Button, Markdown } = elements
-    // Mobile has no text field: the search is then the /tareas argument.
+    // Mobile has no text field: the search is then the /task-pilot:tasks argument.
     const Input = 'Input' in elements ? elements.Input : undefined
     const showHotkeys = e.surface === 'terminal'
     const v = await read($, view)
@@ -147,6 +142,10 @@ export const register: Register = on => {
 
     const selected = v.selected ? tasks.find(t => t.id.toLowerCase() === v.selected?.toLowerCase()) : undefined
 
+    // Every subtask below `id`, depth first, with how deep it sits.
+    const subtaskTree = (id: string, depth: number): { task: Task; depth: number }[] =>
+      childrenOf(tasks, id).flatMap(task => [{ task, depth }, ...subtaskTree(task.id, depth + 1)])
+
     if (selected) {
       const [contextText, logText] = await Promise.all([
         readOr(`${root}/tasks/${selected.id}/context.md`),
@@ -155,6 +154,10 @@ export const register: Register = on => {
       const context = contextText.trim()
       const log = parseLog(logText)
       const spent = minutes.get(selected.id) ?? 0
+      const parents = ancestorsOf(tasks, selected)
+      const below = descendantsOf(tasks, selected.id)
+      const belowOpen = below.filter(isOpen).length
+      const spentWithSubtasks = below.reduce((n, t) => n + (minutes.get(t.id) ?? 0), spent)
       const estimate = estimateOf(selected)
       const done = selected.steps.filter(s => isStepDone(s.status)).length
       const total = selected.steps.length
@@ -187,6 +190,20 @@ export const register: Register = on => {
               ↻ Refrescar
             </Button>
           </Box>
+
+          {parents.length > 0 && (
+            <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
+              <Text dimColor>Subtarea de</Text>
+              {parents.map((p, i) => (
+                <Box flexDirection="row" gap={1}>
+                  {i > 0 && <Text dimColor>›</Text>}
+                  <Button key={`parent-${p.id}`} plain onPress={() => update($, view, x => ({ ...x, selected: p.id }))}>
+                    <Text color={statusOf(p.status).color}>{p.id}</Text> <Text dimColor>{p.title}</Text>
+                  </Button>
+                </Box>
+              ))}
+            </Box>
+          )}
 
           <Box flexDirection="column" borderStyle="round" borderColor={status.color} paddingX={1}>
             <Text>
@@ -235,6 +252,7 @@ export const register: Register = on => {
               ) : (
                 <Text dimColor>Sin estimación</Text>
               )}
+              {below.length > 0 && <Text dimColor>{formatMinutes(spentWithSubtasks)} con subtareas</Text>}
             </Box>
           </Box>
 
@@ -252,6 +270,35 @@ export const register: Register = on => {
                     {step.estimateMin ? <Text dimColor> · {formatMinutes(step.estimateMin)}</Text> : ''}
                     {current ? <Text color="suggestion"> ← ahora</Text> : ''}
                   </Text>
+                )
+              })}
+            </Box>
+          )}
+
+          {below.length > 0 && (
+            <Box flexDirection="column">
+              <Text bold>
+                Subtareas{' '}
+                <Text dimColor>
+                  {below.length - belowOpen}/{below.length} cerradas
+                </Text>
+              </Text>
+              {subtaskTree(selected.id, 0).map(({ task: child, depth }) => {
+                const st = statusOf(child.status)
+                const steps = child.steps.filter(s => isStepDone(s.status)).length
+
+                return (
+                  <Button key={`sub-${child.id}`} plain onPress={() => update($, view, x => ({ ...x, selected: child.id }))}>
+                    {'  '.repeat(depth + 1)}
+                    <Text color={st.color}>{st.icon}</Text> <Text color={st.color}>{child.id}</Text>{' '}
+                    <Text dimColor={!isOpen(child)}>{child.title}</Text>
+                    <Text dimColor>
+                      {' · '}
+                      {st.label}
+                      {child.steps.length > 0 ? ` · ${steps}/${child.steps.length} pasos` : ''} · ⏱{' '}
+                      {formatMinutes(minutes.get(child.id) ?? 0)} ›
+                    </Text>
+                  </Button>
                 )
               })}
             </Box>
@@ -295,9 +342,11 @@ export const register: Register = on => {
       )
     }
 
-    const filtered = tasks
-      .filter(byFilter(v.filter))
-      .filter(t => matches(t, v.query))
+    const inView = tasks.filter(byFilter(v.filter)).filter(t => matches(t, v.query))
+    const inViewIds = new Set(inView.map(t => t.id))
+    // Subtasks show inside their parent's card, unless the parent is not in this view.
+    const filtered = inView
+      .filter(t => !t.parentId || !inViewIds.has(t.parentId))
       .sort((a, b) => rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt))
     // Each card takes 4 rows; the header, search, filters and footer about 10.
     const perPage = Math.max(2, Math.floor((rows - 10) / 4))
@@ -385,6 +434,11 @@ export const register: Register = on => {
             const current = task.steps.find(s => s.status === 'doing') ?? task.steps.find(s => s.status === 'todo')
             const newGroup = i === 0 || shown[i - 1]!.status !== task.status
             const groupSize = filtered.filter(t => t.status === task.status).length
+            const subtasks = descendantsOf(tasks, task.id)
+            const subtaskSummary = STATUS_ORDER.map(s => ({ s, n: subtasks.filter(t => t.status === s).length }))
+              .filter(x => x.n > 0)
+              .map(x => `${x.n} ${statusOf(x.s).label.toLowerCase()}`)
+              .join(' · ')
 
             return (
               <Box flexDirection="column">
@@ -409,7 +463,9 @@ export const register: Register = on => {
                     <Text color={status.color} bold>
                       {task.id}
                     </Text>{' '}
-                    <Text bold>{task.title}</Text> <Text dimColor>· {timeAgo(task.updatedAt)} ›</Text>
+                    <Text bold>{task.title}</Text>
+                    {task.parentId ? <Text dimColor> · subtarea de {task.parentId}</Text> : ''}
+                    <Text dimColor> · {timeAgo(task.updatedAt)} ›</Text>
                   </Button>
                   <Text wrap="truncate-end">
                     {task.steps.length > 0 ? (
@@ -427,6 +483,11 @@ export const register: Register = on => {
                     <Text dimColor> de {formatMinutes(estimate)}</Text>
                     {current && isOpen(task) ? <Text dimColor>{'   '}→ {current.text}</Text> : ''}
                   </Text>
+                  {subtasks.length > 0 && (
+                    <Text dimColor wrap="truncate-end">
+                      ↳ {plural(subtasks.length, 'subtarea', 'subtareas')}: {subtaskSummary}
+                    </Text>
+                  )}
                 </Box>
               </Box>
             )

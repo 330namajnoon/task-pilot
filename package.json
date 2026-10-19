@@ -1,6 +1,6 @@
 {
   "name": "task-pilot",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "Claude Code plugin that keeps tasks (estimate, plan, progress, where you left off) across sessions and tracks the time spent on each one.",
   "type": "module",

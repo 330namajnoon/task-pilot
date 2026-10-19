@@ -1,5 +1,5 @@
 {
-  "description": "task-pilot: session context, activity heartbeats for time tracking, session-to-task binding and the /tareas panel",
+  "description": "task-pilot: session context, activity heartbeats for time tracking, session-to-task binding and the /task-pilot:tasks panel",
   "modules": ["./panel/register.tsx"],
   "hooks": {
     "SessionStart": [

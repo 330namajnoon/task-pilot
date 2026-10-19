@@ -34,7 +34,7 @@ function sessionStartContext(binding: SessionBinding | undefined, cwd: string | 
       `task-pilot: this session is working on task ${active.id}. Its saved state follows.`,
       "Keep it updated: task_plan for steps, task_log for decisions/blockers, task_checkpoint after each step and before ending.",
       "",
-      renderResumePack(active, totals.get(active.id) ?? 0, 4),
+      renderResumePack(active, totals.get(active.id) ?? 0, 4, totals),
     ].join("\n");
   }
   const here = cwd ? listTasks().filter((t) => isOpen(t) && belongsToProject(t, cwd)) : [];

@@ -45,6 +45,8 @@ export interface Task {
   externalRef?: string;
   project?: string;
   branch?: string;
+  /** Task this one is a subtask of. Subtasks keep their own status, plan, log and time. */
+  parentId?: string;
   tags: string[];
   steps: Step[];
   createdAt: string;
@@ -65,6 +67,7 @@ export interface NewTask {
   branch?: string;
   tags?: string[];
   steps?: { text: string; estimateMin?: number }[];
+  parentId?: string;
 }
 
 export function isOpen(task: Task): boolean {
@@ -118,6 +121,49 @@ export function listTasks(): Task[] {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** Direct subtasks of `id`, oldest first. */
+export function childrenOf(id: string, tasks = listTasks()): Task[] {
+  return tasks
+    .filter((t) => t.parentId === id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/** Every subtask below `id`, at any depth. */
+export function descendantsOf(id: string, tasks = listTasks()): Task[] {
+  return childrenOf(id, tasks).flatMap((c) => [c, ...descendantsOf(c.id, tasks)]);
+}
+
+/** Parent, grandparent... up to the top task (closest first). */
+export function ancestorsOf(task: Task, tasks = listTasks()): Task[] {
+  const chain: Task[] = [];
+  let parentId = task.parentId;
+  while (parentId && !chain.some((t) => t.id === parentId)) {
+    const parent = tasks.find((t) => t.id === parentId);
+    if (!parent) break;
+    chain.push(parent);
+    parentId = parent.parentId;
+  }
+  return chain;
+}
+
+/** Checks that `task` can hang from `parentId` (it exists and no cycle is made) and returns its normalized id. */
+export function validParent(task: Pick<Task, "id"> | undefined, parentId: string): string {
+  const parent = requireTask(parentId);
+  if (task && (parent.id === task.id || ancestorsOf(parent).some((t) => t.id === task.id))) {
+    throw new Error(
+      `${parent.id} is ${task.id} itself or one of its subtasks; it cannot be its parent.`,
+    );
+  }
+  return parent.id;
+}
+
+/** Next free id below a parent: STORE-42.1, STORE-42.2... */
+function nextChildId(parentId: string): string {
+  let n = 1;
+  while (getTask(`${parentId}.${n}`)) n++;
+  return `${parentId}.${n}`;
+}
+
 function nextAutoId(): string {
   const max = listTasks()
     .map((t) => /^T-(\d+)$/.exec(t.id)?.[1])
@@ -127,7 +173,10 @@ function nextAutoId(): string {
 }
 
 export function createTask(input: NewTask, now = new Date()): Task {
-  const id = normalizeId(input.id ?? input.externalRef ?? nextAutoId());
+  const parentId = input.parentId ? validParent(undefined, input.parentId) : undefined;
+  const id = normalizeId(
+    input.id ?? input.externalRef ?? (parentId ? nextChildId(parentId) : nextAutoId()),
+  );
   if (getTask(id)) throw new Error(`Task ${id} already exists. Use task_resume to continue it.`);
   const iso = now.toISOString();
   const task: Task = {
@@ -140,6 +189,7 @@ export function createTask(input: NewTask, now = new Date()): Task {
     externalRef: input.externalRef,
     project: input.project,
     branch: input.branch,
+    parentId,
     tags: input.tags ?? [],
     steps: (input.steps ?? []).map((s, i) => ({
       id: i + 1,
@@ -151,7 +201,13 @@ export function createTask(input: NewTask, now = new Date()): Task {
     updatedAt: iso,
   };
   saveTask(task, now);
-  appendLog(id, "status", `Created as ${task.status} (${task.type}).`, now);
+  appendLog(
+    id,
+    "status",
+    `Created as ${task.status} (${task.type})${parentId ? `, subtask of ${parentId}` : ""}.`,
+    now,
+  );
+  if (parentId) appendLog(parentId, "note", `Subtask ${id} added: ${task.title}`, now);
   return task;
 }
 

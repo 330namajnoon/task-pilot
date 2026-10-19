@@ -14,6 +14,10 @@ task-pilot keeps each task outside the conversation, in `~/.claude-tasks/`, so a
 3. **Checkpoint** — call `task_checkpoint` after finishing each step, after an important decision, when the user is about to leave, and whenever a hook reminds you. Write it for a reader with zero context: done, half done (and in which state), next concrete steps, decisions, key files, open questions. A good checkpoint is the whole point of the plugin.
 4. **Finish** — final `task_checkpoint` with the outcome, then `task_stop` with the final status (`done`, `review`, `blocked`...).
 
+## Subtasks
+
+When a task is big enough to have parts that are tracked on their own (their own status, plan, checkpoint and time), create them with `task_create` and `parentId` set to the parent task; subtasks can have subtasks too. Their ids default to `PARENT.1`, `PARENT.2`... and they inherit the parent's project. A subtask's status does not change its parent's: close each one when it is finished, and close the parent when the whole thing is. `task_list` indents them under their parent (`parent: <id>` lists only one task's subtasks), `task_resume` of a parent shows its subtask tree, and `task_update` with `parentId` moves a task under another one (`""` makes it top-level again). Prefer steps for small parts done in one go; use subtasks for parts that take sessions of their own or are worked on separately.
+
 Only one task is active per session. To switch, `task_checkpoint` the current one and then `task_resume`/`task_start` the other one.
 
 ## Estimating

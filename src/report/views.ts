@@ -1,7 +1,12 @@
 import { basename } from "node:path";
 import { formatMinutes } from "../time/dates.js";
 import {
+  ancestorsOf,
+  childrenOf,
+  descendantsOf,
   effectiveEstimate,
+  isOpen,
+  listTasks,
   readContext,
   recentLog,
   stepProgress,
@@ -52,20 +57,65 @@ export function renderHeader(task: Task, trackedMin: number): string {
     `Type: ${task.type} · Status: ${task.status} · ${renderProgress(task)} · ${renderTime(task, trackedMin)}`,
     `Project: ${where}${task.externalRef && task.externalRef.toUpperCase() !== task.id ? ` · Ref: ${task.externalRef}` : ""}${task.tags.length ? ` · Tags: ${task.tags.join(", ")}` : ""}`,
   ];
+  const parents = ancestorsOf(task);
+  if (parents.length) {
+    lines.push(
+      `Subtask of: ${parents
+        .reverse()
+        .map((p) => `${p.id} · ${p.title} (${p.status})`)
+        .join(" › ")}`,
+    );
+  }
   if (task.description) lines.push("", task.description);
   return lines.join("\n");
 }
 
+/** Subtasks of a task as an indented tree, with status, progress and time; empty when it has none. */
+export function renderSubtasks(
+  task: Task,
+  totals: Map<string, number>,
+  tasks = listTasks(),
+): string {
+  const below = descendantsOf(task.id, tasks);
+  if (!below.length) return "";
+  const lines: string[] = [];
+  const walk = (id: string, depth: number) => {
+    for (const child of childrenOf(id, tasks)) {
+      lines.push(
+        `${"  ".repeat(depth)}- **${child.id}** · ${child.status} · ${child.title} · ${renderProgress(child)} · ${formatMinutes(totals.get(child.id) ?? 0)} tracked`,
+      );
+      walk(child.id, depth + 1);
+    }
+  };
+  walk(task.id, 0);
+  const open = below.filter(isOpen).length;
+  const withSubtasks = below.reduce(
+    (n, t) => n + (totals.get(t.id) ?? 0),
+    totals.get(task.id) ?? 0,
+  );
+  return [
+    `${below.length - open}/${below.length} subtasks closed · ${formatMinutes(withSubtasks)} tracked including subtasks`,
+    ...lines,
+  ].join("\n");
+}
+
 /** Everything needed to pick a task back up in a new session. */
-export function renderResumePack(task: Task, trackedMin: number, logEntries = 6): string {
+export function renderResumePack(
+  task: Task,
+  trackedMin: number,
+  logEntries = 6,
+  totals = new Map<string, number>(),
+): string {
   const context = readContext(task.id);
   const log = recentLog(task.id, logEntries);
+  const subtasks = renderSubtasks(task, totals);
   return [
     renderHeader(task, trackedMin),
     "",
     "## Plan",
     renderSteps(task),
     "",
+    ...(subtasks ? ["## Subtasks", subtasks, ""] : []),
     "## Where we left off",
     context?.trim() ||
       "_No checkpoint yet. Save one with task_checkpoint when you reach a milestone._",
@@ -76,10 +126,26 @@ export function renderResumePack(task: Task, trackedMin: number, logEntries = 6)
 }
 
 /** One line per task for lists. */
-export function renderListLine(task: Task, trackedMin: number, cwd?: string): string {
+export function renderListLine(task: Task, trackedMin: number, cwd?: string, depth = 0): string {
   const project = task.project ? basename(task.project) : "-";
   const here = cwd && task.project === cwd ? " (this repo)" : "";
-  return `- **${task.id}** · ${task.status} · ${task.type} · ${task.title} — ${project}${here} · ${renderProgress(task)} · ${renderTime(task, trackedMin)} · updated ${task.updatedAt.slice(0, 10)}`;
+  const parent = task.parentId && depth === 0 ? ` · subtask of ${task.parentId}` : "";
+  return `${"  ".repeat(depth)}- **${task.id}**${parent} · ${task.status} · ${task.type} · ${task.title} — ${project}${here} · ${renderProgress(task)} · ${renderTime(task, trackedMin)} · updated ${task.updatedAt.slice(0, 10)}`;
+}
+
+/**
+ * List lines with each subtask indented under its parent. A task whose parent is not in `tasks`
+ * (filtered out) is shown at the top level, noting whose subtask it is.
+ */
+export function renderTree(tasks: Task[], totals: Map<string, number>, cwd?: string): string {
+  const ids = new Set(tasks.map((t) => t.id));
+  const lines: string[] = [];
+  const walk = (task: Task, depth: number) => {
+    lines.push(renderListLine(task, totals.get(task.id) ?? 0, cwd, depth));
+    for (const child of tasks.filter((t) => t.parentId === task.id)) walk(child, depth + 1);
+  };
+  for (const task of tasks.filter((t) => !t.parentId || !ids.has(t.parentId))) walk(task, 0);
+  return lines.join("\n");
 }
 
 export interface CheckpointInput {

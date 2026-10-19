@@ -10,6 +10,7 @@ export type Task = {
   externalRef?: string
   project?: string
   branch?: string
+  parentId?: string
   tags: string[]
   steps: Step[]
   createdAt: string
@@ -117,6 +118,34 @@ export function parseLog(text: string): LogEntry[] {
 
       return { when: when.trim(), kind: kind.trim(), text: body.join('\n').trim() }
     })
+}
+
+/** Direct subtasks of `id`, oldest first. */
+export function childrenOf(tasks: Task[], id: string): Task[] {
+  return tasks.filter(t => t.parentId === id).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+}
+
+/** Every subtask below `id`, at any depth. */
+export function descendantsOf(tasks: Task[], id: string, seen = new Set<string>()): Task[] {
+  seen.add(id)
+
+  return childrenOf(tasks, id)
+    .filter(c => !seen.has(c.id))
+    .flatMap(c => [c, ...descendantsOf(tasks, c.id, seen)])
+}
+
+/** Parent, grandparent... up to the top task, top first. */
+export function ancestorsOf(tasks: Task[], task: Task): Task[] {
+  const chain: Task[] = []
+  let parentId = task.parentId
+  while (parentId && !chain.some(t => t.id === parentId)) {
+    const parent = tasks.find(t => t.id === parentId)
+    if (!parent) break
+    chain.unshift(parent)
+    parentId = parent.parentId
+  }
+
+  return chain
 }
 
 export function estimateOf(task: Task): number | undefined {

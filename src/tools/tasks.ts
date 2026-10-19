@@ -6,6 +6,7 @@ import {
   renderListLine,
   renderResumePack,
   renderSteps,
+  renderTree,
   UNBIND_MARKER,
 } from "../report/views.js";
 import { loadConfig } from "../store/config.js";
@@ -13,12 +14,16 @@ import {
   appendLog,
   belongsToProject,
   createTask,
+  descendantsOf,
+  getTask,
   isOpen,
   listTasks,
   requireTask,
   saveTask,
   setStatus,
   STATUSES,
+  validParent,
+  type Status,
   type Task,
 } from "../store/tasks.js";
 import { summarizeAll } from "../time/queries.js";
@@ -34,6 +39,16 @@ import {
 
 function trackedFor(id: string): number {
   return summarizeAll().byTask.get(id) ?? 0;
+}
+
+/** Warns when a task is closed while some of its subtasks are still open (it is allowed). */
+function openSubtasksWarning(task: Task, status: Status | undefined): string[] {
+  if (!status || isOpen(task)) return [];
+  const open = descendantsOf(task.id).filter(isOpen);
+  if (!open.length) return [];
+  return [
+    `Note: ${task.id} is ${task.status} but has open subtasks: ${open.map((t) => `${t.id} (${t.status})`).join(", ")}. Close or move them if they are not needed.`,
+  ];
 }
 
 /** Starting work on a task moves it to in_progress (and reopens it if it was closed). */
@@ -54,7 +69,9 @@ export function registerTaskTools(server: McpServer): void {
       description:
         "Creates a task that persists across sessions. Give it a type, a plan of steps and an estimate when you can " +
         "(the report tool shows how long past tasks of the same type really took). " +
-        "By default it also becomes the active task of this session, so the time from now on is tracked on it.",
+        "By default it also becomes the active task of this session, so the time from now on is tracked on it. " +
+        "Pass parentId to make it a subtask of another task (subtasks can have subtasks too): it keeps its own status, " +
+        "plan, checkpoint, log and time, and is shown under its parent.",
       inputSchema: {
         title: z.string().min(1),
         type: z.string().min(1).describe(`Kind of work. Usual types: ${types}.`),
@@ -69,8 +86,18 @@ export function registerTaskTools(server: McpServer): void {
           .string()
           .optional()
           .describe("Ticket key such as STORE-6042. When given it is also used as the task id."),
-        id: z.string().optional().describe("Custom id. Default: externalRef, or T-0001, T-0002..."),
-        project: absolutePath.optional().describe("Project folder. Default: the current one."),
+        id: z
+          .string()
+          .optional()
+          .describe(
+            "Custom id. Default: externalRef, or T-0001, T-0002... (PARENT.1, PARENT.2... for subtasks).",
+          ),
+        parentId: idSchema
+          .optional()
+          .describe("Id of the task this one is a subtask of. Omit for a top-level task."),
+        project: absolutePath
+          .optional()
+          .describe("Project folder. Default: the parent's for a subtask, else the current one."),
         tags: z.array(z.string()).optional(),
         start: z
           .boolean()
@@ -79,7 +106,8 @@ export function registerTaskTools(server: McpServer): void {
       },
     },
     guard((args) => {
-      const project = args.project ?? currentProject();
+      const parent = args.parentId ? getTask(args.parentId) : undefined;
+      const project = args.project ?? parent?.project ?? currentProject();
       const task = createTask({ ...args, project, branch: currentBranch(project) });
       const start = args.start ?? true;
       if (start) markStarted(task);
@@ -101,7 +129,8 @@ export function registerTaskTools(server: McpServer): void {
     {
       title: "List tasks",
       description:
-        "Lists tasks with status, progress and tracked time vs estimate. By default only open ones.",
+        "Lists tasks with status, progress and tracked time vs estimate, subtasks indented under their parent. " +
+        "By default only open ones.",
       inputSchema: {
         status: z
           .union([z.enum(["open", "all"]), z.enum(STATUSES)])
@@ -116,14 +145,20 @@ export function registerTaskTools(server: McpServer): void {
           .string()
           .optional()
           .describe("Text to look for in the id, title, description or tags."),
+        parent: idSchema.optional().describe("Only the subtasks (at any depth) of this task."),
       },
       annotations: { readOnlyHint: true },
     },
-    guard(({ status = "open", scope = "all", type, query }) => {
+    guard(({ status = "open", scope = "all", type, query, parent }) => {
       const cwd = currentProject();
       const needle = query?.toLowerCase();
-      const tasks = listTasks().filter(
+      const all = listTasks();
+      const under = parent
+        ? new Set(descendantsOf(requireTask(parent).id, all).map((t) => t.id))
+        : undefined;
+      const tasks = all.filter(
         (t) =>
+          (!under || under.has(t.id)) &&
           (status === "all" || (status === "open" ? isOpen(t) : t.status === status)) &&
           (scope === "all" || belongsToProject(t, cwd)) &&
           (!type || t.type === type.toLowerCase()) &&
@@ -133,8 +168,7 @@ export function registerTaskTools(server: McpServer): void {
             )),
       );
       if (!tasks.length) return "No tasks match. Create one with task_create.";
-      const totals = summarizeAll().byTask;
-      return tasks.map((t) => renderListLine(t, totals.get(t.id) ?? 0, cwd)).join("\n");
+      return renderTree(tasks, summarizeAll().byTask, cwd);
     }),
   );
 
@@ -165,7 +199,8 @@ export function registerTaskTools(server: McpServer): void {
         }
       }
       markStarted(task);
-      return `${renderResumePack(task, trackedFor(task.id))}\n\n${bindMarker(task.id)}`;
+      const totals = summarizeAll().byTask;
+      return `${renderResumePack(task, totals.get(task.id) ?? 0, 6, totals)}\n\n${bindMarker(task.id)}`;
     }),
   );
 
@@ -207,7 +242,7 @@ export function registerTaskTools(server: McpServer): void {
         if (note) appendLog(task.id, "note", note);
         if (status) {
           setStatus(task, status);
-          lines.push(`${task.id} is now ${status}.`);
+          lines.push(`${task.id} is now ${status}.`, ...openSubtasksWarning(task, status));
         }
         saveTask(task);
       }
@@ -221,7 +256,8 @@ export function registerTaskTools(server: McpServer): void {
     {
       title: "Update a task",
       description:
-        "Changes the title, type, status, estimate, description, tags, ticket or project of a task.",
+        "Changes the title, type, status, estimate, description, tags, ticket, project or parent of a task. " +
+        "Use parentId to move it under another task, or an empty parentId to make it a top-level task.",
       inputSchema: {
         id: idSchema,
         title: z.string().min(1).optional(),
@@ -232,10 +268,27 @@ export function registerTaskTools(server: McpServer): void {
         tags: z.array(z.string()).optional(),
         externalRef: z.string().optional(),
         project: absolutePath.optional(),
+        parentId: z
+          .string()
+          .optional()
+          .describe('Task to hang it from, or "" to make it a top-level task.'),
       },
     },
-    guard(({ id, status, type, estimateMin, ...rest }) => {
+    guard(({ id, status, type, estimateMin, parentId, ...rest }) => {
       const task = requireTask(id);
+      if (parentId !== undefined) {
+        const next = parentId.trim() ? validParent(task, parentId) : undefined;
+        if (next !== task.parentId) {
+          appendLog(
+            task.id,
+            "note",
+            next
+              ? `Moved under ${next} (was ${task.parentId ?? "top level"}).`
+              : `Moved to top level (was under ${task.parentId}).`,
+          );
+          task.parentId = next;
+        }
+      }
       if (estimateMin !== undefined && estimateMin !== task.estimateMin) {
         appendLog(
           task.id,
@@ -250,7 +303,9 @@ export function registerTaskTools(server: McpServer): void {
       }
       if (status) setStatus(task, status);
       saveTask(task);
-      return renderHeader(task, trackedFor(task.id));
+      return [renderHeader(task, trackedFor(task.id)), ...openSubtasksWarning(task, status)].join(
+        "\n",
+      );
     }),
   );
 }
