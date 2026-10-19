@@ -30,6 +30,7 @@ Restart Claude Code after installing so the hooks and the MCP server load.
 | `/task-pilot:status` | Open tasks with progress and time vs estimate |
 | `/task-pilot:today` | What you worked on today and for how long |
 | `/task-pilot:report [period]` | Report for `week`, `last_week`, `month`, a date range…, optionally as CSV |
+| `/tareas [search \| id]` | Opens a panel to browse and search tasks, with each task's steps, time vs estimate, last checkpoint and log |
 
 You don't need the commands for everything: the plugin includes a skill, so asking things like *"let's continue the login task"*, *"what did I do this week?"* or *"how long would this take?"* works too. When a session starts in a repo that has open tasks, Claude is told about them.
 
