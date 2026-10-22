@@ -24,6 +24,7 @@ export const paths = {
   taskFile: (id: string) => join(paths.taskDir(id), "task.json"),
   contextFile: (id: string) => join(paths.taskDir(id), "context.md"),
   logFile: (id: string) => join(paths.taskDir(id), "log.md"),
+  attachmentsDir: (id: string) => join(paths.taskDir(id), "attachments"),
   sessionsDir: () => join(homeDir(), "sessions"),
   sessionFile: (sessionId: string) =>
     join(homeDir(), "sessions", `${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}.json`),

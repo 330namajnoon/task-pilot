@@ -1,5 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createServer } from "../src/server.js";
 import { readContext, getTask } from "../src/store/tasks.js";
@@ -7,7 +9,7 @@ import { appendEntry } from "../src/store/time.js";
 import { localDate } from "../src/time/dates.js";
 import { useTempHome } from "./helpers.js";
 
-useTempHome();
+const home = useTempHome();
 
 let client: Client;
 
@@ -171,6 +173,51 @@ describe("task tools", () => {
     );
     await call("task_update", { id: "STORE-7.1.1", parentId: "" });
     expect(getTask("STORE-7.1.1")?.parentId).toBeUndefined();
+  });
+
+  it("attaches files to tasks and subtasks, as copies or links", async () => {
+    await call("task_create", { title: "Checkout", type: "feature", externalRef: "STORE-9" });
+    await call("task_create", {
+      title: "Form",
+      type: "feature",
+      parentId: "STORE-9",
+      start: false,
+    });
+    const spec = join(home.dir(), "spec.md");
+    const big = join(home.dir(), "dump.log");
+    writeFileSync(spec, "# Spec\n");
+    writeFileSync(big, "log line\n");
+
+    const out = await call("task_attach", {
+      id: "store-9",
+      add: [
+        { path: spec, note: "Acceptance criteria" },
+        { path: big, mode: "link", name: "Server log" },
+      ],
+    });
+    expect(out).toContain("1. **spec.md** · 7 B · copy");
+    expect(out).toContain("2. **Server log** · 9 B · link · " + big);
+    const [copy, link] = getTask("STORE-9")!.attachments!;
+    expect(copy!.path).toBe(join(home.dir(), "tasks", "STORE-9", "attachments", "1-spec.md"));
+    expect(readFileSync(copy!.path, "utf8")).toBe("# Spec\n");
+    expect(link!.path).toBe(big);
+
+    await call("task_attach", { id: "STORE-9.1", add: [{ path: spec }] });
+    expect(getTask("STORE-9.1")?.attachments).toHaveLength(1);
+
+    const pack = await call("task_resume", { id: "STORE-9" });
+    expect(pack).toContain("## Attachments");
+    expect(pack).toContain("Acceptance criteria");
+
+    await call("task_attach", { id: "STORE-9", remove: [1, 2] });
+    expect(getTask("STORE-9")?.attachments).toEqual([]);
+    expect(existsSync(copy!.path)).toBe(false);
+    expect(existsSync(big)).toBe(true);
+
+    await expect(
+      call("task_attach", { id: "STORE-9", add: [{ path: join(home.dir(), "nope.txt") }] }),
+    ).rejects.toThrow("not found");
+    expect(await call("task_attach", { id: "STORE-9" })).toContain("No attachments");
   });
 
   it("returns a readable error for unknown tasks", async () => {

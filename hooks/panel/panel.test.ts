@@ -2,6 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 
 const ROOT = '/h/.claude-tasks'
 
+const SPEC = '/h/.claude-tasks/tasks/STORE-1/attachments/1-spec.md'
+
 const task = (id: string, title: string, status: string, steps: string[], done: number, parentId?: string) =>
   JSON.stringify({
     id,
@@ -13,6 +15,10 @@ const task = (id: string, title: string, status: string, steps: string[], done: 
     branch: id,
     project: '/code/store',
     steps: steps.map((text, i) => ({ id: i + 1, text, status: i < done ? 'done' : 'todo', estimateMin: 30 })),
+    attachments:
+      id === 'STORE-1'
+        ? [{ id: 1, name: 'spec.md', path: SPEC, source: '/code/spec.md', mode: 'copy', size: 24, note: 'Criterios', addedAt: '2026-10-12T09:00:00.000Z' }]
+        : undefined,
     createdAt: '2026-10-10T09:00:00.000Z',
     updatedAt: status === 'done' ? '2026-10-11T09:00:00.000Z' : '2026-10-12T09:00:00.000Z',
   })
@@ -23,6 +29,7 @@ const FILES: Record<string, string> = {
   [`${ROOT}/tasks/STORE-2/task.json`]: task('STORE-2', 'Arreglar login', 'done', ['Fix'], 1),
   [`${ROOT}/tasks/STORE-1.1/task.json`]: task('STORE-1.1', 'Validar firma', 'blocked', ['Leer doc'], 0, 'STORE-1'),
   [`${ROOT}/tasks/STORE-1.1.1/task.json`]: task('STORE-1.1.1', 'Pedir claves', 'backlog', [], 0, 'STORE-1.1'),
+  [SPEC]: '# Spec\nLa firma usa HMAC.\n',
   [`${ROOT}/tasks/STORE-1/context.md`]: 'Firma pendiente de revisar.',
   [`${ROOT}/tasks/STORE-1/log.md`]: '## 2026-10-12 11:00 · progress\nStep 1 done: Leer API\n',
   [`${ROOT}/time/2026-10-12.jsonl`]: [
@@ -68,6 +75,12 @@ test('lists, searches and opens a task', async ($, on) => {
 
     return { value: text }
   })
+  on('fs.stat', async (_$, e) => {
+    const text = FILES[e.path]
+    if (text === undefined) return { deny: 'ENOENT' }
+
+    return { value: { kind: 'file', size: text.length, mtimeMs: 0, isLink: false } as const }
+  })
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'task-pilot', surface, ...PANE })
@@ -89,6 +102,13 @@ test('lists, searches and opens a task', async ($, on) => {
     await ui.press({ key: 'task-STORE-1' })
     expect(await ui.find({ type: 'Text', text: /Firma pendiente|Firmar/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /1\/3 pasos/ })).toBeDefined()
+
+    // Attachments: listed with their note, and a press opens the preview of the copy.
+    expect(await ui.find({ type: 'Text', text: /Criterios/ })).toBeDefined()
+    await ui.press({ key: 'att-1' })
+    expect(await ui.find({ key: 'att-md-1' })).toBeDefined()
+    await ui.press({ key: 'att-close' })
+    expect(await ui.find({ key: 'att-md-1' })).toBeUndefined()
 
     // Subtasks: nested under STORE-1, each one opening its own detail with the path back up.
     expect(await ui.find({ key: 'sub-STORE-1.1' })).toBeDefined()

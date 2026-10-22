@@ -70,6 +70,23 @@ export function renderHeader(task: Task, trackedMin: number): string {
   return lines.join("\n");
 }
 
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function renderAttachments(task: Task): string {
+  const list = task.attachments ?? [];
+  if (!list.length) return "_No attachments. Add files with task_attach._";
+  return list
+    .map(
+      (a) =>
+        `- ${a.id}. **${a.name}** · ${formatBytes(a.size)} · ${a.mode === "copy" ? "copy" : "link"} · ${a.path}${a.note ? ` — ${a.note}` : ""}`,
+    )
+    .join("\n");
+}
+
 /** Subtasks of a task as an indented tree, with status, progress and time; empty when it has none. */
 export function renderSubtasks(
   task: Task,
@@ -116,6 +133,7 @@ export function renderResumePack(
     renderSteps(task),
     "",
     ...(subtasks ? ["## Subtasks", subtasks, ""] : []),
+    ...(task.attachments?.length ? ["## Attachments", renderAttachments(task), ""] : []),
     "## Where we left off",
     context?.trim() ||
       "_No checkpoint yet. Save one with task_checkpoint when you reach a milestone._",

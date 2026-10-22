@@ -9,6 +9,8 @@ import {
   CLOSED,
   descendantsOf,
   estimateOf,
+  fileKind,
+  formatBytes,
   formatMinutes,
   matches,
   minutesByTask,
@@ -16,7 +18,7 @@ import {
   parseTasks,
   timeAgo,
 } from './data'
-import type { Task } from './data'
+import type { FileKind, Task } from './data'
 
 const PANE = 'task-pilot'
 const TITLE = 'Tareas'
@@ -27,6 +29,7 @@ const view = atom({ plugin: 'task-pilot', key: 'view' } as const, {
   query: '',
   filter: 'open',
   selected: null,
+  attachment: null,
   page: 0,
 } as View)
 const tick = atom({ plugin: 'task-pilot', key: 'tick' } as const, 0)
@@ -81,13 +84,22 @@ const timeColor = (spent: number, estimate?: number): Color =>
 
 const basename = (path?: string) => path?.split('/').filter(Boolean).pop()
 
+type Preview =
+  | { kind: 'missing' | 'png' | 'none'; truncated?: undefined }
+  | { kind: 'markdown' | 'text'; text: string; truncated: boolean }
+
+// Text previews stop at what a pane can reasonably show; the rest opens with «Abrir».
+const PREVIEW_MAX_BYTES = 1024 * 1024
+const PREVIEW_LINES = 200
+const PREVIEW_CHARS = 20_000
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 export const register: Register = on => {
   on('command.run', { command: COMMAND }, async ($, e) => {
     const arg = e.args.trim()
     // An argument that is a task ID opens its detail; anything else is a search (see the render hook).
-    if (arg) await update($, view, v => ({ ...v, query: arg, filter: 'all' as const, selected: arg, page: 0 }))
+    if (arg) await update($, view, v => ({ ...v, query: arg, filter: 'all' as const, selected: arg, attachment: null, page: 0 }))
     await update($, tick, n => n + 1)
     await $.ui.open({ id: PANE, title: TITLE, focus: true })
 
@@ -103,9 +115,11 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
-    const { Box, Text, Button, Markdown } = elements
+    const { Box, Text, Button, Markdown, Code, Link } = elements
     // Mobile has no text field: the search is then the /task-pilot:tasks argument.
     const Input = 'Input' in elements ? elements.Input : undefined
+    // Only the terminal draws pictures.
+    const Image = 'Image' in elements ? elements.Image : undefined
     const showHotkeys = e.surface === 'terminal'
     const v = await read($, view)
     await read($, tick)
@@ -116,6 +130,22 @@ export const register: Register = on => {
     const narrow = columns < 70
 
     const readOr = (path: string) => $.fs.read(path).catch(() => '')
+
+    // What an attachment's preview draws: the picture, its text (cut to what a pane shows) or nothing.
+    const previewOf = async (path: string, kind: FileKind): Promise<Preview> => {
+      const info = await $.fs.stat(path).catch(() => undefined)
+      if (!info || info.kind !== 'file') return { kind: 'missing' }
+      if (kind === 'png') return { kind }
+      if (kind !== 'markdown' && kind !== 'text') return { kind: 'none' }
+      if (info.size > PREVIEW_MAX_BYTES) return { kind: 'none' }
+      const text = await $.fs.read(path).catch(() => undefined)
+      if (text === undefined) return { kind: 'missing' }
+      const lines = text.split('\n')
+      const cut = lines.length > PREVIEW_LINES || text.length > PREVIEW_CHARS
+      const shown = cut ? lines.slice(0, PREVIEW_LINES).join('\n').slice(0, PREVIEW_CHARS) : text
+
+      return { kind, text: shown, truncated: cut }
+    }
     const taskDirs = (await $.fs.list(`${root}/tasks`).catch(() => [])).filter(d => d.kind === 'dir')
     const timeFiles = (await $.fs.list(`${root}/time`).catch(() => [])).filter(f => f.name.endsWith('.jsonl'))
     const [taskTexts, timeTexts, configText] = await Promise.all([
@@ -172,11 +202,13 @@ export const register: Register = on => {
         ...selected.tags.map(t => `#${t}`),
       ].filter(Boolean)
       const statWidth = narrow ? undefined : '50%'
+      const attachment = selected.attachments.find(a => a.id === v.attachment)
+      const preview = attachment && (await previewOf(attachment.path, fileKind(attachment.path)))
 
       return (
         <Box flexDirection="column" gap={1}>
           <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Button key="back" hotkey="b" onPress={() => update($, view, x => ({ ...x, selected: null }))}>
+            <Button key="back" hotkey="b" onPress={() => update($, view, x => ({ ...x, selected: null, attachment: null }))}>
               ← Volver a la lista
             </Button>
             <Button
@@ -197,7 +229,7 @@ export const register: Register = on => {
               {parents.map((p, i) => (
                 <Box flexDirection="row" gap={1}>
                   {i > 0 && <Text dimColor>›</Text>}
-                  <Button key={`parent-${p.id}`} plain onPress={() => update($, view, x => ({ ...x, selected: p.id }))}>
+                  <Button key={`parent-${p.id}`} plain onPress={() => update($, view, x => ({ ...x, selected: p.id, attachment: null }))}>
                     <Text color={statusOf(p.status).color}>{p.id}</Text> <Text dimColor>{p.title}</Text>
                   </Button>
                 </Box>
@@ -288,7 +320,7 @@ export const register: Register = on => {
                 const steps = child.steps.filter(s => isStepDone(s.status)).length
 
                 return (
-                  <Button key={`sub-${child.id}`} plain onPress={() => update($, view, x => ({ ...x, selected: child.id }))}>
+                  <Button key={`sub-${child.id}`} plain onPress={() => update($, view, x => ({ ...x, selected: child.id, attachment: null }))}>
                     {'  '.repeat(depth + 1)}
                     <Text color={st.color}>{st.icon}</Text> <Text color={st.color}>{child.id}</Text>{' '}
                     <Text dimColor={!isOpen(child)}>{child.title}</Text>
@@ -299,6 +331,73 @@ export const register: Register = on => {
                       {formatMinutes(minutes.get(child.id) ?? 0)} ›
                     </Text>
                   </Button>
+                )
+              })}
+            </Box>
+          )}
+
+          {selected.attachments.length > 0 && (
+            <Box flexDirection="column">
+              <Text bold>
+                Adjuntos <Text dimColor>({selected.attachments.length})</Text>
+              </Text>
+              {selected.attachments.map(a => {
+                const expanded = a.id === attachment?.id
+
+                return (
+                  <Box flexDirection="column">
+                    <Button
+                      key={`att-${a.id}`}
+                      plain
+                      onPress={() => update($, view, x => ({ ...x, attachment: expanded ? null : a.id }))}
+                    >
+                      {' '}
+                      <Text color="claude">{expanded ? '▾' : '▸'}</Text> <Text bold={expanded}>{a.name}</Text>
+                      <Text dimColor>
+                        {' · '}
+                        {formatBytes(a.size)} · {a.mode === 'link' ? 'enlace' : 'copia'} · {timeAgo(a.addedAt)}
+                      </Text>
+                    </Button>
+                    {a.note && (
+                      <Text dimColor wrap="truncate-end">
+                        {'   '}
+                        {a.note}
+                      </Text>
+                    )}
+                    {expanded && preview && (
+                      <Box flexDirection="column" borderStyle="round" borderColor="claude" paddingX={1}>
+                        <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
+                          <Link href={`file://${encodeURI(a.path)}`} label="Abrir" />
+                          <Button key="att-copy" onPress={press => $.ui.copy({ text: a.path, surface: press.surface })}>
+                            Copiar ruta
+                          </Button>
+                          <Button key="att-close" dimColor onPress={() => update($, view, x => ({ ...x, attachment: null }))}>
+                            Cerrar
+                          </Button>
+                        </Box>
+                        <Text dimColor wrap="truncate-middle">
+                          {a.path}
+                        </Text>
+                        {preview.kind === 'missing' && <Text color="error">No se encuentra el fichero: se movió o se borró.</Text>}
+                        {preview.kind === 'png' &&
+                          (Image ? (
+                            <Image
+                              key={`att-image-${a.id}`}
+                              source={{ file: a.path, format: 'png' }}
+                              columns={Math.max(10, Math.min(80, columns - 6))}
+                              rows={Math.max(5, Math.min(20, rows - 12))}
+                              alt={a.name}
+                            />
+                          ) : (
+                            <Text dimColor>La imagen se ve en la terminal; aquí ábrela con «Abrir».</Text>
+                          ))}
+                        {preview.kind === 'markdown' && <Markdown key={`att-md-${a.id}`} text={preview.text} />}
+                        {preview.kind === 'text' && <Code source={preview.text} path={a.path} startLine={1} wrap="truncate-end" />}
+                        {preview.truncated && <Text dimColor>… recortado; ábrelo para verlo entero.</Text>}
+                        {preview.kind === 'none' && <Text dimColor>Sin vista previa para este tipo de fichero; ábrelo con «Abrir».</Text>}
+                      </Box>
+                    )}
+                  </Box>
                 )
               })}
             </Box>
@@ -458,7 +557,7 @@ export const register: Register = on => {
                   <Button
                     key={`task-${task.id}`}
                     plain
-                    onPress={() => update($, view, x => ({ ...x, selected: task.id }))}
+                    onPress={() => update($, view, x => ({ ...x, selected: task.id, attachment: null }))}
                   >
                     <Text color={status.color} bold>
                       {task.id}
@@ -481,6 +580,7 @@ export const register: Register = on => {
                     <Text dimColor>{'   '}⏱ </Text>
                     <Text color={timeColor(spent, estimate)}>{formatMinutes(spent)}</Text>
                     <Text dimColor> de {formatMinutes(estimate)}</Text>
+                    {task.attachments.length > 0 ? <Text dimColor>{'   '}📎 {task.attachments.length}</Text> : ''}
                     {current && isOpen(task) ? <Text dimColor>{'   '}→ {current.text}</Text> : ''}
                   </Text>
                   {subtasks.length > 0 && (

@@ -35,6 +35,22 @@ export interface Step {
   estimateMin?: number;
 }
 
+export const ATTACHMENT_MODES = ["copy", "link"] as const;
+export type AttachmentMode = (typeof ATTACHMENT_MODES)[number];
+
+export interface Attachment {
+  id: number;
+  name: string;
+  /** Where the file is read from: the copy inside the task folder, or the original for a link. */
+  path: string;
+  /** Path the file was attached from. */
+  source: string;
+  mode: AttachmentMode;
+  size: number;
+  note?: string;
+  addedAt: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -49,6 +65,8 @@ export interface Task {
   parentId?: string;
   tags: string[];
   steps: Step[];
+  /** Files attached to this task; a subtask keeps its own. Absent in tasks saved before 0.4. */
+  attachments?: Attachment[];
   createdAt: string;
   updatedAt: string;
   startedAt?: string;

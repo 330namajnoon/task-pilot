@@ -18,6 +18,10 @@ task-pilot keeps each task outside the conversation, in `~/.claude-tasks/`, so a
 
 When a task is big enough to have parts that are tracked on their own (their own status, plan, checkpoint and time), create them with `task_create` and `parentId` set to the parent task; subtasks can have subtasks too. Their ids default to `PARENT.1`, `PARENT.2`... and they inherit the parent's project. A subtask's status does not change its parent's: close each one when it is finished, and close the parent when the whole thing is. `task_list` indents them under their parent (`parent: <id>` lists only one task's subtasks), `task_resume` of a parent shows its subtask tree, and `task_update` with `parentId` moves a task under another one (`""` makes it top-level again). Prefer steps for small parts done in one go; use subtasks for parts that take sessions of their own or are worked on separately.
 
+## Attachments
+
+When a file belongs to the work (a spec, a screenshot of the bug, a log, an export the user gives you), attach it with `task_attach` to the task or subtask it is about, with a `note` saying what it is. By default it is copied into the task's folder, so it survives the original being moved or deleted; use `mode: "link"` for big files or ones that keep changing. `task_attach` with only the id lists them, `remove` takes attachment numbers. `task_resume` lists them, so read the ones that matter when you pick a task back up. The user sees them, with a preview, in the task panel.
+
 Only one task is active per session. To switch, `task_checkpoint` the current one and then `task_resume`/`task_start` the other one.
 
 ## Estimating
@@ -40,4 +44,4 @@ Only one task is active per session. To switch, `task_checkpoint` the current on
 
 ## Data
 
-Everything is plain files the user can read or edit: `tasks/<ID>/task.json` (metadata and steps), `context.md` (last checkpoint), `log.md` (history), `time/YYYY-MM-DD.jsonl` (activity and adjustments), `config.json` (task types, idle timeout, reminder interval, workday hours). Set `TASK_PILOT_HOME` to keep them somewhere else.
+Everything is plain files the user can read or edit: `tasks/<ID>/task.json` (metadata, steps and attachments), `attachments/` (copies of attached files), `context.md` (last checkpoint), `log.md` (history), `time/YYYY-MM-DD.jsonl` (activity and adjustments), `config.json` (task types, idle timeout, reminder interval, workday hours). Set `TASK_PILOT_HOME` to keep them somewhere else.

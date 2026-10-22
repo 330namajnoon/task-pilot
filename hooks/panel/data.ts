@@ -1,5 +1,16 @@
 export type Step = { id: number; text: string; status: string; estimateMin?: number }
 
+export type Attachment = {
+  id: number
+  name: string
+  path: string
+  source: string
+  mode: string
+  size: number
+  note?: string
+  addedAt: string
+}
+
 export type Task = {
   id: string
   title: string
@@ -13,6 +24,7 @@ export type Task = {
   parentId?: string
   tags: string[]
   steps: Step[]
+  attachments: Attachment[]
   createdAt: string
   updatedAt: string
   closedAt?: string
@@ -40,7 +52,7 @@ export function parseTasks(texts: string[]): Task[] {
   return texts
     .map(text => parseJson<Task>(text))
     .filter((task): task is Task => task !== undefined && typeof task.id === 'string')
-    .map(task => ({ ...task, tags: task.tags ?? [], steps: task.steps ?? [] }))
+    .map(task => ({ ...task, tags: task.tags ?? [], steps: task.steps ?? [], attachments: task.attachments ?? [] }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
@@ -177,12 +189,40 @@ export function matches(task: Task, query: string): boolean {
     task.branch,
     ...task.tags,
     ...task.steps.map(s => s.text),
+    ...task.attachments.flatMap(a => [a.name, a.note]),
   ]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
 
   return q.split(/\s+/).every(word => haystack.includes(word))
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+export type FileKind = 'png' | 'image' | 'markdown' | 'text' | 'other'
+
+const TEXT_EXTENSIONS = new Set(
+  (
+    'txt log csv tsv json jsonl yaml yml toml ini env xml html htm css scss sql sh bash zsh ' +
+    'js mjs cjs ts tsx jsx py rb php java kt go rs c h cpp hpp cs swift diff patch'
+  ).split(' '),
+)
+
+/** How the panel can preview a file, from its extension. */
+export function fileKind(name: string): FileKind {
+  const ext = /\.([^./]+)$/.exec(name.toLowerCase())?.[1] ?? ''
+  if (ext === 'png') return 'png'
+  if (['jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic'].includes(ext)) return 'image'
+  if (ext === 'md' || ext === 'markdown') return 'markdown'
+  if (TEXT_EXTENSIONS.has(ext)) return 'text'
+
+  return 'other'
 }
 
 export function bar(done: number, total: number, width = 12): string {
